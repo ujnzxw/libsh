@@ -1,0 +1,312 @@
+#!/bin/sh
+#-----------------------------------------------------------------------------
+# Created on Apr 13, 2017
+
+# Author: ujnzxw
+# Description:
+#   We always write the same code when we write a shell script, such as the
+#   log format code, color print code, human-computer interaction code, etc.
+#   We spend so many time on repeat-wheel-making.
+#   This Labrary will solve all of this.
+#   It will speed up your Shell script coding work, and we can focus on more
+#   valuable things.
+#
+#   Labrary Functionality:
+#   1. log print controller
+#   2. human-computer interaction function
+#   3. IP format checking tools
+#   4. program exist checking tool
+#-----------------------------------------------------------------------------
+#set -ex
+
+### global prefix for logs {
+    # use 'unset PREFIX LOGFILE' to customize them in your scripts
+    export PERFIX=$(date +%Y%m%d-%H%M%S)
+    export LOGFILE=""
+    export COLOR=1
+    export ERROR_CALLBACK="unknow"
+# }
+
+### pre-handles {
+    # avoid potential issue: error retrieving current directory: getcwd
+    # https://stackoverflow.com/questions/12338233/shell-init-issue-when-click-tab-whats-wrong-with-getcwd
+    cd   > /dev/null 2>&1
+    cd - > /dev/null 2>&1
+# }
+
+### color defines {
+if [ $COLOR -eq 1 ]; then
+    export RED="\33[31m"        # red
+    export GREEN="\33[32m"      # green
+    export YELLOW="\33[33m"     # yellow
+    export CYAN="\33[36m"       # cyan
+    export C_END="\33[0m"       # color end
+else
+    export RED=""
+    export GREEN=""
+    export YELLOW=""
+    export C_END=""
+fi
+# }
+
+### check if $var is set or not
+is_set() { if [ -z ${var+x} ]; then return 0 ; else return 1; fi }
+### check if $var is non-null/non-zero string variable if set
+is_null() { if [ -n "$1" ]; then return 1; else return 0; fi }
+### get dirname of $0 of layer
+### p=$(get_path "/u/xzhao027/test.sh" 1)
+### p will be /u
+get_path()
+{
+    dollar0=$1
+    layer=$2
+    if [ -L ${dollar0} ]; then
+        pushd `readlink ${dollar0} | xargs dirname` > /dev/null 2>&1
+    else
+        pushd `dirname ${dollar0}` > /dev/null 2>&1
+    fi
+
+    mypath=`pwd -P`
+    popd > /dev/null 2>&1
+    [ $layer -eq 0 ] && echo $mypath
+
+    while [ $layer -gt 0 ]; do
+        layer=$(($layer-1))
+        mypath=$(dirname $mypath)
+    done
+
+    echo $mypath
+}
+
+### remove colors from a string
+rm_color() { echo "$@" | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g"; }
+
+ECHO()
+{
+    # print to LOGFILE
+    if [ ! -z ${ERROR_CALLBACK+x} ] && [ -f "${LOGFILE}" ]; then
+        echo_str=$( rm_color "$@")
+        printf '%b\n' "$PREFIX ${echo_str}" 2>&1 >> "${LOGFILE}"
+    fi
+
+    # print to STDOUT
+    printf '%b\n' "$PREFIX $@" 2>&1
+}
+
+msg() { ECHO "${CYAN}[INFO]${C_END} $@"; }
+
+success() { ECHO "${GREEN}[SUCC]${C_END} $@"; }
+
+error()
+{
+    ECHO "${RED}[ERRO]${C_END} $@"
+
+    if [ ! -z ${ERROR_CALLBACK+x} ] && \
+       [ ! -n "${ERROR_CALLBACK}" ] && \
+       [ "${ERROR_CALLBACK}" != "unknow" ]; then
+
+        msg "dot in error callback function ..."
+        $ERROR_CALLBACK
+        success "error callback function completed."
+    fi
+
+    exit 1
+}
+
+warning() { ECHO "${YELLOW}[WARN]${C_END} $@"; }
+
+
+debug()
+{
+    if [ "$debug_mode" -eq '1' ] && [ "$ret" -gt '1' ]; then
+        ECHO "ERROR in func \"${FUNCNAME[$i+1]}\" on line ${BASH_LINENO[$i+1]}."
+    fi
+}
+
+program_exists()
+{
+    local ret='0'
+    command -v $1 >/dev/null 2>&1 || { local ret='1'; }
+
+    # fail on non-zero return value
+    if [ "$ret" -ne 0 ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+program_must_exist()
+{
+    program_exists $1
+
+    # throw error on non-zero return value
+    if [ "$?" -ne 0 ]; then
+        error "You must have '$1' installed to continue."
+    fi
+}
+
+has() { type "$1" > /dev/null 2>&1; }
+
+confirm()
+{
+    # call with a prompt string or use a default
+    read -r -p "${1:-Are you sure (default NO)? [y/N]} " response
+    case $response in
+        [yY][eE][sS]|[yY])
+            true
+            ;;
+        *)
+            false
+            ;;
+    esac
+}
+
+function prepend_to_path
+{
+    if [ -d "$1" ] && [[ ":$PATH:" != *":$1:"* ]]; then
+        PATH="$1:$PATH"
+    fi
+}
+
+# Return 0 if $1/$2 is a valid ip/prefix, 1 if not
+# If $3 is set to n, don't include the /prefix on error messages
+function validate_ip
+{
+    # deduce family
+    ipfamily=4
+    echo $1 | grep -q ":" && ipfamily=6
+
+    # Make sure the basic format is valid
+    if ! ipcalc -c -$ipfamily "$1/$2" 2>/dev/null
+    then
+        if [ "$3" == "n" ]
+        then
+            description=$1
+        else
+            description=$1/$2
+        fi
+        error "$description is not a valid IPv$ipfamily address"
+        return 1
+    fi
+
+    return 0
+}
+
+
+# $1 = comma separated list of IPs to validate
+# $2 = prefix to use
+function validate_ip_list
+{
+    echo $1 | tr "," "\n" | while read an_ip
+    do
+        if [ -z "$an_ip" ]
+        then
+            error "empty IP"
+            return 1
+        fi
+        no_prefix $an_ip || return 1
+        validate_ip $an_ip $2 n || return 1
+    done
+    return 0
+}
+
+# returns success if $1 does not include a /prefix
+function no_prefix
+{
+    if echo $1 | grep -q /
+    then
+        error "don't include /prefix"
+        return 1
+    fi
+    return 0
+}
+
+# Print error and return fail if $1 is not the subnet $2
+function same_network
+{
+    if [ "$(ipcalc -n $1)" != "NETWORK=$2" ]
+    then
+        error "$1 and $2 are not in the same subnet"
+        return 1
+    fi
+    return 0
+}
+
+# $1 = proposed gateway address
+# $2 = an address that is supposedly in the same subnet
+# $3 = prefix
+# Returns 0 if $1 is a valid address in the same subset at $2/$3
+function validate_gateway
+{
+    validate_ip $1 $3 || return 1
+    validate_ip $2 $3 || return 1
+
+    if [ "$(ipcalc -n $1/$3)" != "$(ipcalc -n $2/$3)" ]
+    then
+        error "$1/$2 and $2/$3 are not in the same subnet"
+        return 1
+    fi
+    return 0
+}
+
+# Returns 0 if $1 is a valid timezone, else 1
+function validate_tz
+{
+    timedatectl list-timezones  | grep -q "^$1"'$' && return 0
+    error "'$1' does not match any timezone listed by 'timedatectl list-timezones'" $2
+    return 1
+}
+
+# Given an eth port, ask user if they want to set up an ip on it,
+# and if so, set it up.
+function setup_ip
+{
+    while true
+    do
+        echo -e "If you would like to configure a static IP address on $1, enter it: \c"
+        read address
+        [ -z "$address" ] && break
+        echo $address | IFS=/ read ip prefix
+
+        if [ -z "$prefix" ]
+        then
+            error "missing /prefix (expecting x.x.x.x/prefix)"
+            continue
+        fi
+
+        if validate_ip $ip $prefix; then
+            IFCFG=/etc/sysconfig/network-scripts/ifcfg-$1
+
+            cat > $IFCFG <<-EOF
+            DEVICE=$1
+            ONBOOT=yes
+            BOOTPROTO=static
+            IPADDR=$ip
+            PREFIX=$prefix
+EOF
+
+            # If there is no default route set up yet,
+            # ask if they want to get up a gateway.
+            ip route list | grep -q default
+            if [ $? -ne 0 ]
+            then
+                while true
+                do
+                    echo -e "Enter gateway address to add, if any (without /prefix): \c"
+                    read gateway
+                    [ -z "$gateway" ] && break
+                    if validate_gateway $gateway $ip $prefix
+                    then
+                        echo GATEWAY=$gateway >> $IFCFG
+                        break
+                    fi
+                done
+            fi
+            echo bringing up $ip/$prefix on $e
+            ifup $e
+            break
+        fi
+    done
+}
+
